@@ -1,0 +1,29 @@
+import PyPDF2
+import pyttsx3
+
+def pdf_to_audio(pdf_file, audio_file):
+    # Inicializando o leitor de PDF
+    try:
+        with open(pdf_file, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            text = ''
+            
+            # Extraindo texto de cada página
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+            
+            # Verificando se o texto foi extraído
+            if not text.strip():
+                print("Não foi possível extrair texto do PDF. Certifique-se de que não seja um PDF baseado em imagem.")
+                return
+            
+            # Inicializando o conversor de texto para fala
+            engine = pyttsx3.init()
+            engine.save_to_file(text, audio_file)
+            engine.runAndWait()
+            print(f"Áudio salvo em: {audio_file}")
+    except Exception as e:
+        print(f"Ocorreu um erro: {e}")
+
+# Exemplo de uso
+pdf_to_audio("exemplo.pdf", "exemplo.np3")
