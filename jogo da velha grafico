@@ -1,0 +1,138 @@
+import pygame
+import sys
+import random
+
+# Inicializa o pygame
+pygame.init()
+
+# Cores
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+LINE_COLOR = (0, 0, 0)
+X_COLOR = (200, 0, 0)
+O_COLOR = (0, 0, 200)
+
+# Tela
+WIDTH = 300
+HEIGHT = 300
+LINE_WIDTH = 5
+SCREEN = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Jogo da Velha com IA")
+
+# Fonte
+FONT = pygame.font.SysFont(None, 100)
+
+# Variáveis do jogo
+board = [[" " for _ in range(3)] for _ in range(3)]
+game_over = False
+player_turn = True  # True = jogador (X), False = computador (O)
+
+def draw_board():
+    SCREEN.fill(WHITE)
+    # Linhas horizontais
+    pygame.draw.line(SCREEN, LINE_COLOR, (0, 100), (300, 100), LINE_WIDTH)
+    pygame.draw.line(SCREEN, LINE_COLOR, (0, 200), (300, 200), LINE_WIDTH)
+    # Linhas verticais
+    pygame.draw.line(SCREEN, LINE_COLOR, (100, 0), (100, 300), LINE_WIDTH)
+    pygame.draw.line(SCREEN, LINE_COLOR, (200, 0), (200, 300), LINE_WIDTH)
+    # Desenhar X e O
+    for r in range(3):
+        for c in range(3):
+            if board[r][c] == "X":
+                text = FONT.render("X", True, X_COLOR)
+                SCREEN.blit(text, (c * 100 + 25, r * 100 + 10))
+            elif board[r][c] == "O":
+                text = FONT.render("O", True, O_COLOR)
+                SCREEN.blit(text, (c * 100 + 25, r * 100 + 10))
+
+def check_winner(player):
+    # Verifica linhas, colunas e diagonais
+    for i in range(3):
+        if board[i][0] == board[i][1] == board[i][2] == player:
+            return True
+        if board[0][i] == board[1][i] == board[2][i] == player:
+            return True
+    if board[0][0] == board[1][1] == board[2][2] == player:
+        return True
+    if board[0][2] == board[1][1] == board[2][0] == player:
+        return True
+    return False
+
+def get_empty_cells():
+    return [(r, c) for r in range(3) for c in range(3) if board[r][c] == " "]
+
+def ai_move():
+    # Tentar vencer
+    for r, c in get_empty_cells():
+        board[r][c] = "O"
+        if check_winner("O"):
+            return
+        board[r][c] = " "
+
+    # Tentar bloquear
+    for r, c in get_empty_cells():
+        board[r][c] = "X"
+        if check_winner("X"):
+            board[r][c] = "O"
+            return
+        board[r][c] = " "
+
+    # Jogar aleatoriamente
+    r, c = random.choice(get_empty_cells())
+    board[r][c] = "O"
+
+def restart_game():
+    global board, game_over, player_turn
+    board = [[" " for _ in range(3)] for _ in range(3)]
+    game_over = False
+    player_turn = True
+
+def main():
+    global player_turn, game_over
+
+    clock = pygame.time.Clock()
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+                x, y = pygame.mouse.get_pos()
+                row = y // 100
+                col = x // 100
+
+                if board[row][col] == " " and player_turn:
+                    board[row][col] = "X"
+                    if check_winner("X"):
+                        print("Você venceu!")
+                        game_over = True
+                    elif not get_empty_cells():
+                        print("Empate!")
+                        game_over = True
+                    else:
+                        player_turn = False
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    restart_game()
+
+        if not player_turn and not game_over:
+            pygame.time.delay(500)
+            ai_move()
+            if check_winner("O"):
+                print("Computador venceu!")
+                game_over = True
+            elif not get_empty_cells():
+                print("Empate!")
+                game_over = True
+            else:
+                player_turn = True
+
+        draw_board()
+        pygame.display.update()
+        clock.tick(60)
+
+if __name__ == "__main__":
+    main()
