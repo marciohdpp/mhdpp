@@ -1,0 +1,17 @@
+from moviepy.editor import *
+
+# Caminhos dos arquivos
+audio_file = "audio.mp3"
+image_file = "imagem.jpg"
+output_file = "video.mp4"
+
+# Carregar imagem e áudio
+audio_clip = AudioFileClip(audio_file)
+image_clip = ImageClip(image_file).set_duration(audio_clip.duration)
+
+# Configurar vídeo
+video = image_clip.set_audio(audio_clip)
+video = video.set_fps(24)  # Taxa de quadros
+
+# Salvar como vídeo
+video.write_videofile(output_file, codec='libx264', audio_codec='aac')
