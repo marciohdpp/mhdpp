@@ -1,29 +1,72 @@
 import PyPDF2
 import pyttsx3
+import os
+import re
 
-def pdf_to_audio(pdf_file, audio_file):
-    # Inicializando o leitor de PDF
+def extract_text_from_pdf(pdf_path):
+    """Extrai texto de todas as páginas do PDF e ajusta pontuação."""
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"Arquivo '{pdf_path}' não encontrado.")
+
+    with open(pdf_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        text = ''
+
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text.strip() + ' '  # espaço simples para não colar palavras
+
+    if not text.strip():
+        raise ValueError("Nenhum texto extraído. Verifique se o PDF é baseado em imagem.")
+
+    # Corrigir espaçamento após pontuação
+    text = fix_text_spacing(text)
+
+    return text
+
+def fix_text_spacing(text):
+    """Corrige espaços após pontos finais e vírgulas."""
+    # Garante espaço depois de pontos e vírgulas, se não houver
+    text = re.sub(r'([.,;!?])(?=\S)', r'\1 ', text)
+    # Remove espaços duplos
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
+
+def configure_engine(rate=150, volume=1.0, voice_gender='female'):
+    """Configura o motor de texto para fala."""
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+
+    selected_voice = None
+    for voice in voices:
+        if voice_gender.lower() in voice.name.lower():
+            selected_voice = voice.id
+            break
+
+    if selected_voice:
+        engine.setProperty('voice', selected_voice)
+    engine.setProperty('rate', rate)
+    engine.setProperty('volume', volume)
+
+    return engine
+
+def text_to_audio(text, audio_file_path):
+    """Converte texto para arquivo de áudio."""
+    engine = configure_engine(rate=140, voice_gender='female')
+    engine.save_to_file(text, audio_file_path)
+    engine.runAndWait()
+
+def pdf_to_audio(pdf_path, audio_path):
+    """Função principal que converte PDF em áudio."""
     try:
-        with open(pdf_file, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            text = ''
-            
-            # Extraindo texto de cada página
-            for page in pdf_reader.pages:
-                text += page.extract_text()
-            
-            # Verificando se o texto foi extraído
-            if not text.strip():
-                print("Não foi possível extrair texto do PDF. Certifique-se de que não seja um PDF baseado em imagem.")
-                return
-            
-            # Inicializando o conversor de texto para fala
-            engine = pyttsx3.init()
-            engine.save_to_file(text, audio_file)
-            engine.runAndWait()
-            print(f"Áudio salvo em: {audio_file}")
+        text = extract_text_from_pdf(pdf_path)
+        text_to_audio(text, audio_path)
+        print(f"Áudio salvo com sucesso em: {audio_path}")
+
     except Exception as e:
-        print(f"Ocorreu um erro: {e}")
+        print(f"Erro ao converter PDF em áudio: {e}")
 
 # Exemplo de uso
-pdf_to_audio("exemplo.pdf", "exemplo.np3")
+if __name__ == "__main__":
+    pdf_to_audio("exemplo.pdf", "exemplo.mp3")
