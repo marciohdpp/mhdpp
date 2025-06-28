@@ -1,17 +1,493 @@
-from moviepy.editor import *
+#!/usr/bin/env python3
+"""
+Conversor Web para Áudio - Text-to-Speech Avançado
+Extrai texto de páginas web e converte para áudio com múltiplas opções
+"""
 
-# Caminhos dos arquivos
-audio_file = "audio.mp3"
-image_file = "imagem.jpg"
-output_file = "video.mp4"
+import requests
+import re
+import os
+import sys
+import time
+import argparse
+from pathlib import Path
+from urllib.parse import urlparse, urljoin
+from dataclasses import dataclass
+from typing import Optional, List, Dict
+import logging
 
-# Carregar imagem e áudio
-audio_clip = AudioFileClip(audio_file)
-image_clip = ImageClip(image_file).set_duration(audio_clip.duration)
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Configurar vídeo
-video = image_clip.set_audio(audio_clip)
-video = video.set_fps(24)  # Taxa de quadros
+@dataclass
+class AudioConfig:
+    """Configurações para conversão de áudio"""
+    voice: str = "pt-BR"
+    speed: float = 1.0
+    pitch: int = 0
+    volume: float = 0.9
+    format: str = "mp3"
+    quality: str = "high"
 
-# Salvar como vídeo
-video.write_videofile(output_file, codec='libx264', audio_codec='aac')
+class WebToAudioConverter:
+    """Conversor principal Web para Áudio"""
+    
+    def __init__(self, config: AudioConfig = None):
+        self.config = config or AudioConfig()
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        
+        # Verificar e inicializar TTS engines disponíveis
+        self.tts_engines = self._detect_tts_engines()
+        logger.info(f"Engines TTS disponíveis: {list(self.tts_engines.keys())}")
+    
+    def _detect_tts_engines(self) -> Dict[str, bool]:
+        """Detecta quais engines TTS estão disponíveis"""
+        engines = {}
+        
+        # Google Text-to-Speech (gTTS)
+        try:
+            import gtts
+            engines['gtts'] = True
+            logger.info("✅ gTTS (Google) disponível")
+        except ImportError:
+            engines['gtts'] = False
+            logger.warning("❌ gTTS não instalado: pip install gtts")
+        
+        # Pyttsx3 (offline)
+        try:
+            import pyttsx3
+            engines['pyttsx3'] = True
+            logger.info("✅ pyttsx3 (offline) disponível")
+        except ImportError:
+            engines['pyttsx3'] = False
+            logger.warning("❌ pyttsx3 não instalado: pip install pyttsx3")
+        
+        # Azure Cognitive Services
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+            engines['azure'] = True
+            logger.info("✅ Azure Speech disponível")
+        except ImportError:
+            engines['azure'] = False
+            logger.warning("❌ Azure Speech não instalado: pip install azure-cognitiveservices-speech")
+        
+        # Edge TTS (Microsoft)
+        try:
+            import edge_tts
+            engines['edge'] = True
+            logger.info("✅ Edge TTS disponível")
+        except ImportError:
+            engines['edge'] = False
+            logger.warning("❌ Edge TTS não instalado: pip install edge-tts")
+        
+        return engines
+    
+    def extract_text_from_url(self, url: str) -> str:
+        """Extrai texto de uma URL usando múltiplas estratégias"""
+        logger.info(f"🌐 Extraindo texto de: {url}")
+        
+        try:
+            # Estratégia 1: BeautifulSoup (mais preciso)
+            if self._is_package_available('bs4'):
+                return self._extract_with_beautifulsoup(url)
+            
+            # Estratégia 2: Requests + Regex (fallback)
+            return self._extract_with_regex(url)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na extração: {e}")
+            return ""
+    
+    def _is_package_available(self, package_name: str) -> bool:
+        """Verifica se um pacote está disponível"""
+        try:
+            __import__(package_name)
+            return True
+        except ImportError:
+            return False
+    
+    def _extract_with_beautifulsoup(self, url: str) -> str:
+        """Extrai texto usando BeautifulSoup (mais preciso)"""
+        try:
+            from bs4 import BeautifulSoup
+            
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remover elementos desnecessários
+            for element in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                element.decompose()
+            
+            # Extrair texto do conteúdo principal
+            main_content = (
+                soup.find('main') or 
+                soup.find('article') or 
+                soup.find('div', class_=re.compile(r'content|article|post')) or
+                soup.find('body')
+            )
+            
+            if main_content:
+                text = main_content.get_text(separator=' ', strip=True)
+            else:
+                text = soup.get_text(separator=' ', strip=True)
+            
+            # Limpar e formatar texto
+            text = self._clean_text(text)
+            logger.info(f"✅ Texto extraído: {len(text)} caracteres")
+            return text
+            
+        except ImportError:
+            logger.warning("❌ BeautifulSoup não disponível: pip install beautifulsoup4")
+            return self._extract_with_regex(url)
+        except Exception as e:
+            logger.error(f"❌ Erro no BeautifulSoup: {e}")
+            return self._extract_with_regex(url)
+    
+    def _extract_with_regex(self, url: str) -> str:
+        """Extrai texto usando regex (fallback básico)"""
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            html = response.text
+            
+            # Remover tags HTML
+            text = re.sub(r'<script.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r'<[^>]+>', '', text)
+            
+            # Limpar texto
+            text = self._clean_text(text)
+            logger.info(f"✅ Texto extraído (regex): {len(text)} caracteres")
+            return text
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na extração com regex: {e}")
+            return ""
+    
+    def _clean_text(self, text: str) -> str:
+        """Limpa e formata o texto extraído"""
+        if not text:
+            return ""
+        
+        # Remover múltiplos espaços em branco
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Remover caracteres especiais problemáticos
+        text = re.sub(r'[^\w\s\.,!?;:()\-áéíóúâêîôûàèìòùãõçÁÉÍÓÚÂÊÎÔÛÀÈÌÒÙÃÕÇ]', '', text)
+        
+        # Limpar início e fim
+        text = text.strip()
+        
+        return text
+    
+    def split_text_into_chunks(self, text: str, max_chars: int = 5000) -> List[str]:
+        """Divide texto em chunks para evitar limites de TTS"""
+        if len(text) <= max_chars:
+            return [text]
+        
+        chunks = []
+        sentences = re.split(r'[.!?]+', text)
+        current_chunk = ""
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            if len(current_chunk) + len(sentence) <= max_chars:
+                current_chunk += sentence + ". "
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence + ". "
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        logger.info(f"📝 Texto dividido em {len(chunks)} partes")
+        return chunks
+    
+    def text_to_speech_gtts(self, text: str, output_file: str) -> bool:
+        """Converte texto para áudio usando Google TTS"""
+        try:
+            from gtts import gTTS
+            import pygame
+            
+            logger.info("🔊 Convertendo com Google TTS...")
+            
+            tts = gTTS(
+                text=text,
+                lang='pt-br' if self.config.voice == 'pt-BR' else 'en',
+                slow=False if self.config.speed >= 1.0 else True
+            )
+            
+            tts.save(output_file)
+            logger.info(f"✅ Áudio salvo: {output_file}")
+            return True
+            
+        except ImportError:
+            logger.error("❌ gTTS não instalado: pip install gtts pygame")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erro no gTTS: {e}")
+            return False
+    
+    def text_to_speech_pyttsx3(self, text: str, output_file: str) -> bool:
+        """Converte texto para áudio usando pyttsx3 (offline)"""
+        try:
+            import pyttsx3
+            
+            logger.info("🔊 Convertendo com pyttsx3 (offline)...")
+            
+            engine = pyttsx3.init()
+            
+            # Configurar voz
+            voices = engine.getProperty('voices')
+            for voice in voices:
+                if 'brazil' in voice.name.lower() or 'portuguese' in voice.name.lower():
+                    engine.setProperty('voice', voice.id)
+                    break
+            
+            # Configurar velocidade e volume
+            engine.setProperty('rate', int(200 * self.config.speed))
+            engine.setProperty('volume', self.config.volume)
+            
+            # Salvar arquivo
+            engine.save_to_file(text, output_file)
+            engine.runAndWait()
+            
+            logger.info(f"✅ Áudio salvo: {output_file}")
+            return True
+            
+        except ImportError:
+            logger.error("❌ pyttsx3 não instalado: pip install pyttsx3")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erro no pyttsx3: {e}")
+            return False
+    
+    def text_to_speech_edge(self, text: str, output_file: str) -> bool:
+        """Converte texto para áudio usando Edge TTS"""
+        try:
+            import asyncio
+            import edge_tts
+            
+            logger.info("🔊 Convertendo com Edge TTS...")
+            
+            async def _convert():
+                voice = "pt-BR-FranciscaNeural"  # Voz feminina brasileira
+                communicate = edge_tts.Communicate(text, voice)
+                await communicate.save(output_file)
+            
+            asyncio.run(_convert())
+            logger.info(f"✅ Áudio salvo: {output_file}")
+            return True
+            
+        except ImportError:
+            logger.error("❌ Edge TTS não instalado: pip install edge-tts")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erro no Edge TTS: {e}")
+            return False
+    
+    def convert_url_to_audio(self, url: str, output_dir: str = "audio_output", 
+                           engine: str = "auto") -> List[str]:
+        """Processo completo: URL → Texto → Áudio"""
+        logger.info(f"🚀 Iniciando conversão de {url}")
+        
+        # Criar diretório de saída
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        # Extrair texto
+        text = self.extract_text_from_url(url)
+        if not text:
+            logger.error("❌ Nenhum texto extraído")
+            return []
+        
+        # Salvar texto extraído
+        domain = urlparse(url).netloc.replace('.', '_')
+        text_file = Path(output_dir) / f"{domain}_texto.txt"
+        with open(text_file, 'w', encoding='utf-8') as f:
+            f.write(text)
+        logger.info(f"📄 Texto salvo em: {text_file}")
+        
+        # Dividir em chunks
+        chunks = self.split_text_into_chunks(text)
+        
+        # Escolher engine TTS
+        if engine == "auto":
+            if self.tts_engines.get('edge'):
+                engine = 'edge'
+            elif self.tts_engines.get('gtts'):
+                engine = 'gtts'
+            elif self.tts_engines.get('pyttsx3'):
+                engine = 'pyttsx3'
+            else:
+                logger.error("❌ Nenhum engine TTS disponível")
+                return []
+        
+        # Converter chunks para áudio
+        audio_files = []
+        for i, chunk in enumerate(chunks, 1):
+            output_file = Path(output_dir) / f"{domain}_part_{i:02d}.mp3"
+            
+            success = False
+            if engine == 'gtts':
+                success = self.text_to_speech_gtts(chunk, str(output_file))
+            elif engine == 'pyttsx3':
+                success = self.text_to_speech_pyttsx3(chunk, str(output_file))
+            elif engine == 'edge':
+                success = self.text_to_speech_edge(chunk, str(output_file))
+            
+            if success:
+                audio_files.append(str(output_file))
+            
+            # Pausa entre conversões
+            time.sleep(1)
+        
+        logger.info(f"🎉 Conversão concluída! {len(audio_files)} arquivos gerados")
+        return audio_files
+    
+    def play_audio(self, audio_file: str):
+        """Reproduz arquivo de áudio"""
+        try:
+            import pygame
+            pygame.mixer.init()
+            pygame.mixer.music.load(audio_file)
+            pygame.mixer.music.play()
+            
+            logger.info(f"🔊 Reproduzindo: {audio_file}")
+            logger.info("Pressione Enter para parar...")
+            
+            while pygame.mixer.music.get_busy():
+                if input() == "":
+                    pygame.mixer.music.stop()
+                    break
+                    
+        except ImportError:
+            logger.error("❌ pygame não instalado: pip install pygame")
+        except Exception as e:
+            logger.error(f"❌ Erro na reprodução: {e}")
+
+def install_dependencies():
+    """Instala dependências automaticamente"""
+    packages = [
+        'requests',
+        'beautifulsoup4',
+        'gtts',
+        'pyttsx3',
+        'edge-tts',
+        'pygame'
+    ]
+    
+    import subprocess
+    import sys
+    
+    print("📦 Instalando dependências...")
+    for package in packages:
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        except subprocess.CalledProcessError:
+            print(f"⚠️ Falha ao instalar {package}")
+    print("✅ Instalação concluída!")
+
+def main():
+    """Função principal com interface de linha de comando"""
+    parser = argparse.ArgumentParser(description="Conversor Web para Áudio")
+    parser.add_argument("url", help="URL da página para converter")
+    parser.add_argument("--output", "-o", default="audio_output", help="Diretório de saída")
+    parser.add_argument("--engine", "-e", choices=['gtts', 'pyttsx3', 'edge', 'auto'], 
+                       default='auto', help="Engine TTS a usar")
+    parser.add_argument("--speed", "-s", type=float, default=1.0, help="Velocidade da fala")
+    parser.add_argument("--play", "-p", action='store_true', help="Reproduzir após converter")
+    parser.add_argument("--install", action='store_true', help="Instalar dependências")
+    
+    args = parser.parse_args()
+    
+    if args.install:
+        install_dependencies()
+        return
+    
+    # Configurar conversor
+    config = AudioConfig(speed=args.speed)
+    converter = WebToAudioConverter(config)
+    
+    # Converter
+    audio_files = converter.convert_url_to_audio(args.url, args.output, args.engine)
+    
+    if not audio_files:
+        print("❌ Nenhum arquivo de áudio gerado")
+        return
+    
+    print(f"\n🎉 Conversão concluída!")
+    print(f"📁 Arquivos salvos em: {args.output}")
+    for file in audio_files:
+        print(f"   🔊 {file}")
+    
+    # Reproduzir se solicitado
+    if args.play and audio_files:
+        for audio_file in audio_files:
+            converter.play_audio(audio_file)
+
+# ===== EXEMPLO DE USO INTERATIVO =====
+def interactive_mode():
+    """Modo interativo para facilitar o uso"""
+    print("🎙️ Conversor Web para Áudio - Modo Interativo")
+    print("=" * 50)
+    
+    # URL
+    url = input("🌐 Digite a URL da página: ").strip()
+    if not url:
+        print("❌ URL obrigatória")
+        return
+    
+    # Engine
+    print("\n🔧 Engines TTS disponíveis:")
+    print("1. Auto (recomendado)")
+    print("2. Google TTS (online)")
+    print("3. Edge TTS (online, melhor qualidade)")
+    print("4. pyttsx3 (offline)")
+    
+    engine_choice = input("Escolha (1-4): ").strip()
+    engine_map = {'1': 'auto', '2': 'gtts', '3': 'edge', '4': 'pyttsx3'}
+    engine = engine_map.get(engine_choice, 'auto')
+    
+    # Configurações
+    speed = input("🏃 Velocidade da fala (0.5-2.0, padrão 1.0): ").strip()
+    try:
+        speed = float(speed) if speed else 1.0
+    except ValueError:
+        speed = 1.0
+    
+    # Converter
+    config = AudioConfig(speed=speed)
+    converter = WebToAudioConverter(config)
+    
+    print(f"\n🚀 Convertendo {url}...")
+    audio_files = converter.convert_url_to_audio(url, engine=engine)
+    
+    if audio_files:
+        print(f"\n✅ Sucesso! {len(audio_files)} arquivos gerados:")
+        for file in audio_files:
+            print(f"   🔊 {file}")
+        
+        if input("\n🔊 Reproduzir agora? (s/N): ").lower().startswith('s'):
+            for audio_file in audio_files:
+                converter.play_audio(audio_file)
+    else:
+        print("❌ Falha na conversão")
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        # Modo interativo se não houver argumentos
+        interactive_mode()
+    else:
+        # Modo linha de comando
+        main()
